@@ -23,6 +23,10 @@ quarantine/
 
 # Engines / Large Binaries
 clamav_install/
+clamav.zip
+*.zip
+*.rar
+*.7z
 
 # Testing artifacts
 test_samples/*.exe
