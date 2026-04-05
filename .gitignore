@@ -1,0 +1,33 @@
+# Bytecode / Cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Built Executable / Packaging
+dist/
+build/
+*.spec
+logo.ico
+
+# Virtual Environments
+venv/
+env/
+.venv/
+
+# Local Configuration / User Data
+memory.json
+settings.json
+logs/
+quarantine/
+
+# Engines / Large Binaries
+clamav_install/
+
+# Testing artifacts
+test_samples/*.exe
+advanced_sandbox_test.exe
+
+# IDEs
+.vscode/
+.idea/
