@@ -57,6 +57,8 @@ class SettingsPage(QWidget):
 
     theme_changed = pyqtSignal(bool)     # True = dark
     mode_changed = pyqtSignal(bool)      # True = auto quarantine
+    realtime_changed = pyqtSignal(bool)  # True = real-time protection on
+    auto_update_changed = pyqtSignal(bool) # True = auto update on
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -107,6 +109,14 @@ class SettingsPage(QWidget):
         scan_label.setFont(QFont("Segoe UI", 15, QFont.Weight.DemiBold))
         layout.addWidget(scan_label)
 
+        self._realtime_row = SettingRow(
+            "🛡️  Real-Time Protection",
+            "Monitor system directories and automatically scan newly downloaded or modified files.",
+            checked=self._settings.get("real_time_protection", True),
+        )
+        self._realtime_row.toggle.toggled.connect(self._on_realtime_toggle)
+        layout.addWidget(self._realtime_row)
+
         self._auto_row = SettingRow(
             "⚡  Auto Quarantine",
             "Automatically quarantine detected malware without asking. "
@@ -115,6 +125,22 @@ class SettingsPage(QWidget):
         )
         self._auto_row.toggle.toggled.connect(self._on_mode_toggle)
         layout.addWidget(self._auto_row)
+
+        layout.addSpacing(16)
+
+        # ── Updates ───────────────────────────────────────────────
+        update_label = QLabel("Updates")
+        update_label.setProperty("class", "subheading")
+        update_label.setFont(QFont("Segoe UI", 15, QFont.Weight.DemiBold))
+        layout.addWidget(update_label)
+
+        self._update_row = SettingRow(
+            "🔄  Auto Update",
+            "Automatically update ClamAV definitions on application startup.",
+            checked=self._settings.get("auto_update", False),
+        )
+        self._update_row.toggle.toggled.connect(self._on_update_toggle)
+        layout.addWidget(self._update_row)
 
         layout.addSpacing(16)
 
@@ -173,8 +199,24 @@ class SettingsPage(QWidget):
         save_settings(self._settings)
         self.mode_changed.emit(checked)
 
+    def _on_realtime_toggle(self, checked: bool) -> None:
+        self._settings["real_time_protection"] = checked
+        save_settings(self._settings)
+        self.realtime_changed.emit(checked)
+
+    def _on_update_toggle(self, checked: bool) -> None:
+        self._settings["auto_update"] = checked
+        save_settings(self._settings)
+        self.auto_update_changed.emit(checked)
+
     def is_dark_mode(self) -> bool:
         return self._settings.get("dark_mode", True)
 
     def is_auto_quarantine(self) -> bool:
         return self._settings.get("auto_quarantine", False)
+
+    def is_realtime_enabled(self) -> bool:
+        return self._settings.get("real_time_protection", True)
+        
+    def is_auto_update_enabled(self) -> bool:
+        return self._settings.get("auto_update", False)

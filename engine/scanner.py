@@ -248,17 +248,24 @@ class Scanner:
         )
 
     def collect_files(self, folder_path: str) -> list[str]:
-        """Recursively collect scannable files from a folder."""
-        files: list[str] = []
+        """Recursively collect scannable files from a folder (legacy)."""
+        return list(self.yield_files(folder_path))
+
+    def yield_files(self, folder_path: str):
+        """
+        Lazily yield scannable files from a folder.
+
+        Uses a generator to avoid building a full file list in memory,
+        allowing the caller to begin scanning immediately during traversal.
+        """
         try:
             for root, _dirs, filenames in os.walk(folder_path):
                 for fname in filenames:
                     ext = os.path.splitext(fname)[1].lower()
                     if ext in SCAN_EXTENSIONS:
-                        files.append(os.path.join(root, fname))
+                        yield os.path.join(root, fname)
         except Exception as e:
             print(f"[scanner] Error traversing {folder_path}: {e}")
-        return files
 
 
 # ────────────────────────── Threaded Workers ────────────────────────
@@ -283,7 +290,12 @@ class FileScanWorker(QObject):
 
 
 class FolderScanWorker(QObject):
-    """Worker for scanning all files in a folder in a background thread."""
+    """
+    Worker for scanning all files in a folder in a background thread.
+
+    Uses generator-based file traversal to start scanning immediately
+    instead of waiting for the full directory tree to be enumerated.
+    """
 
     progress = pyqtSignal(int, int, object)   # current, total, ScanResult
     finished = pyqtSignal(list)               # list[ScanResult]
@@ -300,16 +312,18 @@ class FolderScanWorker(QObject):
 
     def run(self) -> None:
         try:
-            files = self._scanner.collect_files(self._folder_path)
-            total = len(files)
             results: list[ScanResult] = []
+            scanned = 0
 
-            for i, fp in enumerate(files):
+            for fp in self._scanner.yield_files(self._folder_path):
                 if self._cancelled:
                     break
                 result = self._scanner.scan_file(fp)
                 results.append(result)
-                self.progress.emit(i + 1, total, result)
+                scanned += 1
+                # Total is unknown during traversal; emit 0 to signal
+                # indeterminate mode. The UI handles this gracefully.
+                self.progress.emit(scanned, 0, result)
 
             self.finished.emit(results)
         except Exception as e:

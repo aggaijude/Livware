@@ -185,10 +185,15 @@ class ScanFolderPage(QWidget):
         self._progress_label.setText("🛑 Cancelling...")
 
     def _on_progress(self, current: int, total: int, result: ScanResult) -> None:
-        pct = int(current / total * 100) if total else 0
-        self._progress_bar.setMaximum(total)
-        self._progress_bar.setValue(current)
-        self._progress_label.setText(f"Scanning {current}/{total} — {result.file_name}")
+        if total > 0:
+            # Known total — normal progress bar
+            self._progress_bar.setMaximum(total)
+            self._progress_bar.setValue(current)
+            self._progress_label.setText(f"Scanning {current}/{total} — {result.file_name}")
+        else:
+            # Generator mode — indeterminate bar with file count
+            self._progress_bar.setMaximum(0)  # Indeterminate / pulsing
+            self._progress_label.setText(f"Scanning file #{current} — {result.file_name}")
 
         self._results.append(result)
 

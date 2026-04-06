@@ -49,6 +49,8 @@ def main():
         "--hidden-import", "sklearn",   # Robust ML support
         "--hidden-import", "pefile",    # Fixes Sandbox parsing
         "--hidden-import", "yara",      # Fixes YARA matching
+        "--hidden-import", "requests",   # YARA updater network calls
+        "--hidden-import", "watchdog",   # Real-time file monitoring
         "--add-data", f"models;models",
         "--add-data", f"rules;rules",
     ]
@@ -74,7 +76,22 @@ def main():
             
     # Run the build
     subprocess.run(pyi_args, check=True)
-    
+
+    # ── Post-build: Bundle ClamAV installation ──────────────────────
+    clamav_src = os.path.join(BASE_DIR, "clamav_install")
+    clamav_dst = os.path.join(BASE_DIR, "dist", "Livware", "clamav_install")
+    if os.path.isdir(clamav_src):
+        print("      Copying ClamAV installation to distribution folder...")
+        shutil.copytree(clamav_src, clamav_dst, dirs_exist_ok=True)
+        print("      ✓ ClamAV bundled successfully.")
+    else:
+        print("      ⚠ clamav_install directory not found — skipping ClamAV bundling.")
+
+    # ── Post-build: Bundle quarantine & logs skeleton ───────────────
+    for extra_dir in ["quarantine", "logs"]:
+        dst = os.path.join(BASE_DIR, "dist", "Livware", extra_dir)
+        os.makedirs(dst, exist_ok=True)
+
     print("="*60)
     print(" ✅ Build Process Completed!")
     print(r"    Your executable is ready at: dist\Livware\Livware.exe")

@@ -100,6 +100,9 @@ CLAMAV_PATH = find_clamav()
 DEFAULT_SETTINGS = {
     "dark_mode": True,
     "auto_quarantine": False,
+    "real_time_protection": True,
+    "auto_update": False,
+    "excluded_paths": [],
 }
 
 

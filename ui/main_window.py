@@ -6,19 +6,23 @@ Handles theme switching, inter-page navigation, quarantine actions,
 and manages the scan engine + memory system.
 """
 
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFont
+from PyQt6.QtCore import Qt, QThread
+from PyQt6.QtGui import QFont, QIcon, QCloseEvent
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QStackedWidget,
     QMessageBox,
 )
+import os
 
 from config import (
     APP_TITLE, WINDOW_DEFAULT_WIDTH, WINDOW_DEFAULT_HEIGHT,
-    WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT, load_settings,
+    WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT, load_settings, BUNDLE_DIR
 )
-from engine.scanner import Scanner
-from memory.memory_manager import load_memory, update_scan_stats
+from engine.scanner import Scanner, FileScanWorker
+from engine.realtime_watcher import RealtimeWatcher
+from engine.updater import FullUpdaterThread
+from ui.tray_manager import TrayManager
+from memory.memory_manager import load_memory, save_memory, update_scan_stats
 
 from ui.sidebar import Sidebar
 from ui.styles import DARK_THEME, LIGHT_THEME
@@ -47,9 +51,15 @@ class MainWindow(QMainWindow):
         self._settings = load_settings()
         self._dark_mode = self._settings.get("dark_mode", True)
         self._auto_quarantine = self._settings.get("auto_quarantine", False)
+        self._real_time_protection = self._settings.get("real_time_protection", True)
+        self._auto_update = self._settings.get("auto_update", False)
+        self._bg_workers = []
 
         # ── Build UI ────────────────────────────────────────────────
         self._setup_ui()
+        self._setup_tray()
+        self._setup_watcher()
+        self._setup_updater()
         self._connect_signals()
         self._apply_theme()
         self._refresh_dashboard()
@@ -129,6 +139,8 @@ class MainWindow(QMainWindow):
         # Settings
         self._settings_page.theme_changed.connect(self._on_theme_changed)
         self._settings_page.mode_changed.connect(self._on_mode_changed)
+        self._settings_page.realtime_changed.connect(self._apply_realtime_state)
+        self._settings_page.auto_update_changed.connect(self._on_update_changed)
 
     # ── Navigation ──────────────────────────────────────────────────
 
@@ -265,3 +277,140 @@ class MainWindow(QMainWindow):
             self,
         )
         toast.show_toast(self)
+
+    # ── Background Features ─────────────────────────────────────────
+
+    def _setup_tray(self) -> None:
+        icon_path = os.path.join(BUNDLE_DIR, "logo.png")
+        if not os.path.exists(icon_path):
+            icon = QIcon()
+        else:
+            icon = QIcon(icon_path)
+            
+        self._tray_manager = TrayManager(icon, self)
+        self._tray_manager.show_ui_requested.connect(self.showNormal)
+        self._tray_manager.show_ui_requested.connect(self.activateWindow)
+        self._tray_manager.quick_scan_requested.connect(lambda: self._navigate_to(2))
+        self._tray_manager.toggle_protection_requested.connect(self._toggle_real_time_protection)
+        self._tray_manager.exit_requested.connect(self._force_exit)
+        self._tray_manager.update_protection_action(self._real_time_protection)
+
+    def _setup_watcher(self) -> None:
+        self._watcher = RealtimeWatcher()
+        self._watcher.file_detected.connect(self._on_realtime_file_detected)
+        
+        if self._real_time_protection:
+            self._watcher.start()
+            
+    def _setup_updater(self) -> None:
+        self._updater_thread = None
+        if self._auto_update:
+            self._run_full_update()
+
+    def _run_full_update(self) -> None:
+        """Launch the combined ClamAV + YARA updater in a background thread."""
+        if self._updater_thread is not None and self._updater_thread.isRunning():
+            return  # Already running
+
+        self._updater_thread = FullUpdaterThread(self)
+        self._updater_thread.clamav_done.connect(self._on_clamav_update_done)
+        self._updater_thread.yara_done.connect(self._on_yara_update_done)
+        self._updater_thread.all_done.connect(self._on_all_updates_done)
+        self._updater_thread.start()
+
+    def _on_clamav_update_done(self, success: bool, message: str) -> None:
+        if success:
+            print(f"[main_window] ClamAV update: {message}")
+            self._store_update_timestamp("clamav_last_updated")
+        else:
+            print(f"[main_window] ClamAV update failed: {message}")
+
+    def _on_yara_update_done(self, success: bool, message: str) -> None:
+        if success:
+            print(f"[main_window] YARA update: {message}")
+            self._store_update_timestamp("yara_last_updated")
+            # Hot-reload YARA rules in memory without restart
+            reloaded = self._scanner.yara.reload_rules()
+            if reloaded:
+                print("[main_window] YARA rules reloaded in memory.")
+        else:
+            print(f"[main_window] YARA update failed: {message}")
+
+    def _on_all_updates_done(self, success: bool, summary: str) -> None:
+        if success:
+            toast = Toast("✅ Definitions updated successfully", "success", 4000, self)
+        else:
+            toast = Toast(f"⚠ Update partial: {summary}", "warning", 4000, self)
+        toast.show_toast(self)
+        self._refresh_dashboard()
+
+    def _store_update_timestamp(self, key: str) -> None:
+        """Persist an update timestamp into memory.json."""
+        import time
+        mem = load_memory()
+        mem[key] = time.strftime("%Y-%m-%d %H:%M:%S")
+        save_memory(mem)
+
+    def _toggle_real_time_protection(self):
+        new_state = not self._real_time_protection
+        self._settings_page._realtime_row.toggle.setChecked(new_state)
+
+    def _apply_realtime_state(self, enabled: bool):
+        self._real_time_protection = enabled
+        self._tray_manager.update_protection_action(enabled)
+        if enabled:
+            self._watcher.start()
+        else:
+            self._watcher.stop()
+
+    def _on_update_changed(self, enabled: bool):
+        self._auto_update = enabled
+
+    def _on_realtime_file_detected(self, file_path: str):
+        thread = QThread()
+        worker = FileScanWorker(self._scanner, file_path)
+        worker.moveToThread(thread)
+        
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._on_realtime_scan_done)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        
+        self._bg_workers.append(thread)
+        thread.finished.connect(lambda: self._remove_bg_worker(thread))
+        thread.start()
+
+    def _remove_bg_worker(self, thread):
+        if thread in self._bg_workers:
+            self._bg_workers.remove(thread)
+
+    def _on_realtime_scan_done(self, result):
+        self._on_file_scan_done(result)
+        if result.status == "MALWARE":
+            self._tray_manager.show_notification(
+                "Threat Detected!", 
+                f"Livware blocked a threat: {result.file_name}",
+                is_threat=True
+            )
+        elif result.status == "WARNING" or result.status == "SUSPICIOUS":
+            self._tray_manager.show_notification(
+                "Suspicious File", 
+                f"Livware flagged a file for review: {result.file_name}",
+                is_threat=True
+            )
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        """Override close event to minimize to tray instead of exiting."""
+        event.ignore()
+        self.hide()
+        self._tray_manager.show_notification(
+            "Livware is running in the background", 
+            "The antivirus continues to protect your system."
+        )
+
+    def _force_exit(self) -> None:
+        """Actually exit the application."""
+        self._watcher.stop()
+        from PyQt6.QtWidgets import QApplication
+        QApplication.quit()
